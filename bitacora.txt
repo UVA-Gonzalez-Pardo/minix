@@ -1,0 +1,1016 @@
+Daniel González Alonso
+Santos Angel Pardo Ramos
+Grupo 25
+
+* ________________________________________________________________ Practica A ________________________________________________________________ *
+10 de Febrero de 2014
+Una vez instalado virtualbox, y creado un directorio en Documentos llamado minix, he copiado la imagen de minix y el disquete de arranque
+
+En virtualbox he instalado Minix con nombre Minix (ESO) con tipo "other", después he puesto 32mb de memoria, he añadido en disco minix. En configuración/almacenamiento he añadido el controlador de disquete y he añadido el fichero de "disquete de arranque", y deshailitado CD/DVD en Configuración/Sistema orden de arranque
+
+He iniciado la VM y funciona, en el login he puesto "root".
+He intentado cambiar a los distintos terminales con Alt + F_n, y solo funciona F1 y F2
+
+____________________________________________________________________
+Apuntes del profesor
+
+Sobre el editor VI
+
+VI es un editor (vi + nombre del fichero), tiene dos modos: 
+	comandos (presionando ESC) -> i (insertar), a (escribir al final), :w (guardar), :wq (guardar + salir), :q (salir), si te pones encima de una linea y das "yy" copia la linea, con "p" lo pega en la lina que estemos, con "dd" borramos una linea (con <n>dd borramos tantas lineas como queramos), con "u" hacemos "undo" (deshacer), con ":q!" forzamos salir sin guardar. /"cosa" para buscar en un fichero, "n" para el siguiente
+	
+____________________________________________________________________
+
+___ Administración ___
+
+Creo una segunda VM copiando con otro nombre (minix_nuevo y nuevo_img) en una nueva carpeta, en un terminal me muevo a esa carpeta y escribo:
+VBoxManage internalcommands sethduuid minix_nuevo.vdi
+
+Configuro de la misma forma una nueva maquina virtual con el nombre: Minix 2 (ESO).
+
+Escribo (dentro de minix) vi etc/passwd para cambiar el shell por defecto, sustituyendo en la linea que empieza por root, justo en el final, sh por ash, despues añado una nueva linea al final para añadir un nuevo usuario, escribiendo:
+	dani:*:9:9:Daniel Gonzalez:/usr/dani:
+luego, salgo y guardo el fichero, y cambio la contraseña para dani mediante:  "passwd dani"
+
+Pruebo a meterme en un nuevo terminal con ese login, y funciona. Reinicio la máquina con "shutdown -r now", y después la apago con "shutdown -h now"
+
+
+___ Compilación del núcleo ____
+
+Cambio el mensaje de bienvenida con "vi /usr/src/kernel/tty.c", después en la función tty_task(), en el primer printf que veo la añado un par de frases al principio, guardo y salgo con :wq.
+
+Para que el cambio tenga efecto hay que compilarlo, así que para eso voy al directorio  /usr/src/tools mediante cd, compruebo el contenido de revisión mediante "cat revision", y muestra por pantalla un 12. Después escribo "make clean" y compilo mediante "make hdboot", ahora al comprobar de nuevo revisión imprime por pantalla un 13. Reinicio con "shutdown -r now". Compruebo minix, el nuevo núcleo es 2.0.0r13, pero aun así el cambio no se ha mostrado por pantalla.
+Apago y en virtualbox cambio en Sistema/Configuracion el arranque por el disco duro (en vez del disquete), ahora al arrancar si que muestra el cambio.
+Apago y vuelvo a cambiar el arranque al disquete.
+
+____________________________________________________________________
+Apuntes del profesor
+
+el directorio etc/ en los sistemas unix tiene los ficheros de configuración, cabe destacar /passwd, que es un fichero con el nombre de los usuarios  legales. 
+
+___________________________________________________________________
+
+
+___ Programación ____
+
+me pongo en root y creo un directorio: mkdir practica_A vamos a crear un nuevo comando para crear procesos hijos (tantos como el argumento se le de): creaH.c
+
+usaremos una función llamada "errno" (print error), escribimos: man errno
+
+vi creaH.c
+
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <errno.h>
+
+main (int argc, char* argv[]){
+	/*argc - numero de argumentos, argv: ["creaH",argumento1 (Ej: "5"), "\n"] <- son cadenas de caracteres*/
+	
+	int numH, i, ret;
+	
+	if (argc != 2){
+		printf ("creaH <numHijos>\n");
+		exit(-1);
+		/*por convencion si hay error se devuelve -1, si funciona bien se devuelve un 0*/
+	}
+	
+	/*atoi() convierte char a int*/
+	numH = atoi(argv[1]);
+	
+	for (i=0; i < numH; i++){
+		if ((ret=fork()) == 0){
+			/*hijo*/
+			hijo();
+			exit(0);
+		}
+		
+		else{
+			if (ret < 0){
+				/*error en fork*/
+				perror ("fork");
+				printf ("Creados %d procesos.\n", i);
+				exit(-1);
+			}
+		}
+	}
+}
+
+hijo(){
+}
+
+
+Para compilarlo:
+	cc -o creaH creaH.c
+
+Para ejecutarlo:
+	./creaH 5 (por ejemplo)
+	
+Al ejecutarlo con ./creaH 50 devuelve:
+	fork: Resource temporarily unavailable
+	Creados 33 procesos.
+	
+Después de varios intentos se puede concluir que el máximo número de procesos es 33.
+
+
+* ________________________________________________________________ Practica B ________________________________________________________________ *
+17 de Febrero de 2014
+1.-
+  Modo Usuario
+	
+	fork() /usr/src/lib/posix/_fork.c llama a:
+	
+	_Syscall() /usr/src/lib/other/syscall.c, que llama a:
+	
+	_sendrec() /usr/src/lib/i386/rts/_sendrec.s, que realiza la llamada al sistema con int Sysvec con el argumento 33
+	
+
+  Modo privilegiado
+	prot_init() inicializa la tabla de vectores con el argumento 33 (el valor de Sysvec), se llama a s_call(), que ejecuta:
+	  * sys_call(m_ptr, src/dest, send/receive/both) <- implementa la llamada, envia un mensaje al servidor (MM, con mensaje fork)
+	  * _restart() <- después pasamos al modo usuario y a ejecutar MM
+	  
+  Modo Usuario
+	Ejecución de MM (/usr/src/MM)
+	
+	main.c
+	
+	public void main(){
+	    ...
+	    mm_init() <- inicializa tablas del gestor de memoria
+	    
+	    while (TRUE){
+	      get_workcd() <- espera a recibir un mensaje (en nuestro caso fork)
+	      se mete en mm_call el número de llamada al sistema
+	      
+	      se invoca a una función en el vector de funciones call_vec[mm_call]
+	      
+	      reply() <- envía la respuesta al proceso de usuario
+	    }
+	}
+	
+	call_vec está en table.c, allí se puede ver en la posición 2 el nombre de la función que se ejecuta: do_fork, el código de do_fork está en forkexit.c
+2.-
+
+  Al comprobar table.c se puede ver el código de call_vec, en cuya posición 2 se sitúa fork, al llamarle con fork se llama a la función do_fork(), cuyo código está en forkexit.c. Allí modifiqué el archivo original añadiendo al principio un printf ("Hola Mundo.\n"); Además de un comentario para indicar donde estaba situado, salgo y guardo y lo compilo con cc -o forkexit forkexit.c
+
+  Me muevo al directorio /usr/src/tools y hago un make hdboot, después me muevo a /minix y hago install -S 0 2.0.0r16 y finalmente installboot, después Reinicio. Al principio no note ningún cambio, pero después me di cuenta de que estaba ejecutando desde el disquete, así que apague y en la configuración de virtualbox cambie el orden de arranque, primero el disco duro. Después al arrancar ya note el cambio, se imprimian con cada instrucción muchos Hola Mundo. Probé con el programa de crear procesos de la practica_A haciendo, en el directorio /root/practica_A: 
+
+  ./creaH 10
+
+  Y en total imprimió 11 "Hola Mundo".
+
+* ________________________________________________________________ Práctica C ________________________________________________________________ *
+24 de Febrero de 2015
+
+ Hemos empezado a mirarlo en el laboratorio de ESO, ese mismo día, hemos leído la práctica y mirado como hacerlo. El día 28 de Febrero de 2015, Sábado por la mañana, he empezado a crear los archivos y a hacer las modificaciones necesarias para poder hacerlo. He hecho lo siguiente:
+	1> He ido a /usr/include/minix/callnr.h. En este fichero se encuentran las llamadas al sistema. He añadido ASOPS en la posicion 77 y he aumentado en uno el número de llamadas totales al sistema. Aquí me entro la duda, ¿qué relación tiene este fichero con la práctica anterior?y como callnr es un fichero de cabecera (.h), me puse a buscar, y encontré que es llamado dentro del fichero lib.h que se encuentra en /usr/include/
+	2> Ya pasamos ahora al gestor de memoria. El gestor de memoria inicializa un bucle infinito. Como vamos a enviarle un mensaje al MM, necesitamos que call_vec[] contenga la rutina de servicio a nuestra interrupción. Es por eso que añadimos do asops() a /usr/src/mm/table.c escribiendo "do_asops,/*77 =asops*/" Y también se lo añadimos a /usr/src/mm/proto.h Aquí añadimos 
+	   """_PROTOTYPE( int do_asops,(void));"""" 
+	   Con esto ya tenemos una entrada nueva en call_vec y aquí va a empezar nuestra función  do_asops(), que es la que se encuentra dentro del MM y que es la que la que va a realizar la llamada a la tarea del sistema. 
+	   Lo escribimos en usr/src/mm/utility.c Su código es el siguiente:
+	 	PUBLIC int do_asops() {
+
+			int a1, a2, a3;
+
+			a1 = mm_in.m1_i1;
+
+			a2 = mm_in.m1_i2;
+
+			a3 = mm_in.m1_i3; 	
+
+			printf(“MM:do_asops: %d %d %d\n”, a1, a2, a3);
+
+			_taskcall(SYSTASK, ASOPS, &mm_in); /* Reenvio del mensaje a la tarea del sistema */
+			
+
+			result2 = mm_in.m1_i1; /* result2 es una variable externa que se copiara en mm_out.m1_i1 */			
+			
+			mm_out.m1_i1 = result2;			
+
+			mm_out.m1_i2 = mm_in.m1_i2;
+
+			mm_out.m1_i3 = mm_in.m1_i3;
+			
+			return result2;
+
+		}	
+
+            Lo importante aquí es la función _taskcall(SYSTASK, ASOPS, &mm_in); Lo que hace es llamar a la tarea de llamada del sistema, le pasa una serie de argumentos entre ellos los del mensaje. 
+
+	3> Ahora cambiamos de modo usuario a modo privilegiado, en este momento nos encontramos en la tarea del sistema que se encuentra en /usr/src/kernel/system.c Acaba de recibir un mensaje desconocido, por lo que necesitamos adaptar su funcionamiento para que haga lo que nosotros queremos. 
+		1>Lo primero que hacemos es añadir el protoripo de la función, para ellos añadimos lo siguiente:
+				    """ FORWARD _PROTOTYPE( int do_asops,(message *m_ptr));
+		2> Ahora vamos a la rutina sys_task, para escribir dentro del switch lo siguiente: case ASOPS: r=do_asops(&m);
+			ASOPS es la referencia que le hemos pasado como argumento en _taskcall() de aqui llama a la función do_asops(&m) que tenemos que definir a continuacion.
+		3>PRIVATE ind do_asops(m_ptr)
+			register message *m_ptr;
+			{
+			m_ptr->m1_i1++;
+			m_ptr->m1_i2++;
+			m_ptr->m1_i3++;
+			return(OK);
+			}
+
+	   Me muevo al directorio /usr/src/tools y hago un make hdboot, después me muevo a /minix y hago install -S 0 2.0.0r16 y finalmente installboot, 
+           después Reinicio. 
+           
+	4> Ahora ya para acabar nos movemos al directorio root/ y aquí creamos un archivo nuevo llamasis.c Le ponemos lo siguiente:
+		#include<lib.h>
+		#include<sys/types.h>
+		#include<unistd.h>
+		PUBLIC void main(){
+			message msj;
+			msj.m1_i1=2;
+			msj.m1_i2=3;
+			msj.m1_i3=4;
+			_taskcall(MM,ASOPS,&msj);
+			printf("%d      %d     %d    \n",msj.m1_i1,msj.m1_i2,msj.m1_i3);
+		}
+
+	5> Reiniciamos el sistema compilamos el progrma con cc -o llamasis llamasis.c     ./llamasis y todo funciona según lo esperado.
+		Se nos cambian los numeros que habíamos puesto al principio.
+			
+3 de Marzo de 2015
+
+____________________________________________________________________
+Apuntes del profesor
+
+proc_ptr - puntero al pcb - apuntará a la tarea del sistema
+bill_ptr apunta al proceso de usuario que llamo a la tarea
+pname
+
+____________________________________________________________________
+
+7 de Marzo de 2015
+
+Primero empezamos añadiendo a usr/include/minix/callnr.h el nombre de la función que queriamos modificar, en nuestro caso " ESO " con el numero 78, y también incrementamos el numero total de llamadas disponibles NCALLS, ya que en el enunciado dice que usemos valores alfanuméricos para identificar las llamadas.
+
+Después, ya en /usr/src/kernel/system.c creamos una funcion do_eso() de prueba, que simplemente escribía en pantalla un mensaje, para comprobar que todo funcionaba.
+
+Después empezamos modificando la función do_asops que creamos para los puntos anteriores, exactamente la situada en /usr/src/kernel.c, ya que consideramos que las funciones y cambios que hicimos en el gestor de memoria anteriormente nos valían para esta parte de la practica, y que solo teniamos que añadir alguna sentencia, en nuestro caso switch que comparara m1_i1 con las constantes introducidas en callnr de las nuevas llamadas que queramos crear, que nos permitiera acceder a las nuevas llamadas al sistema facilmente, así pues, la función asops nos quedo algo similar a:
+
+	private int do_asops(m_ptr)
+	register message *m_ptr;
+	{
+	    switch (m_ptr->m1_i1){
+		  case ESO: do_eso();
+			  break;
+	    default: return (E_BAD_FCN);
+	    }
+	  
+	  return (OK);
+	}
+	
+En nuestro ejemplo, si la llamada es correcta, se puede ver que el switch comparará el primer campo del mensaje (por eso m_ptr apunta a m1_i1,  siendo este último una macro), si no es correcta, retornará un error.
+
+Después hicimos los cambios en llamasis, situado en nuestro directorio root
+
+	#include<stdio.h>
+	#include<lib.h>
+	#include<sys/tupes.h>
+	#include<unistd.h>
+	int main(void)
+	{
+		message mensaje;
+		mensaje.m1_i1=ESO;
+		mensaje.m1_i2=3;
+		mensaje.m1_i3=4;
+		_taskcall(MM,ASOPS,&msj);
+		printf("%d, %d, %d\n", 
+			mensaje.m1_i1, mensaje.m1_i2, mensaje.m1_i3);
+		return (0);
+	}
+
+Después nos movimos a /usr/src/tools, y compilamos el nucleo. Ahora al compilar llamasis y después ejecutarlo nos salio por pantalla el mensaje que habíamos puesto en la función do_eso, así que ya estamos seguros de que los cambios en do_asops funcionan.
+	
+9 de Marzo de 2015
+
+Empezamos a modificar la función do_eso, para que diera información acerca del proceso, ya que, hasta ahora, esta función simplemente la hicimos para comprobar que los cambios de asops funcionaban. Para ello, primero quise comprobar la estructura de proc_ptr y de bill_ptr, al hacerlo pude observar que ambas eran de tipo struct "proc", para ver proc me movi al  fichero /usr/src/kernel/proc.h, donde al comprobarlo, pude observar dos campos interesantes para mostrar, por un lado el entero p_nr que dice el número del proceso, y por otro lado p_pid, que dice el PID del proceso en cuestión. Al final la funcion do_eso() quedó así:
+
+	PRIVATE int do_eso()
+	{
+		struc proc *tmp = bill_ptr;
+		printf ("Houla, estoy en el kernel, soy do_eso.\n");
+		printf ("Numero de proceso: %d, PID: %d\n", tmp->n_pr, tmp->p_pid);
+	}
+
+Al compilar el núcleo y ejecutar llamasis mostró por pantalla que el número de proceso era el 12 y el PID era 51.
+
+* ________________________________________________________________ Practica D ________________________________________________________________ *
+10 de Marzo de 2015
+
+Hemos estado en el laboratorio mirando lo que hacen y lo que contienen los siguientes ficheros y funciones:
+	
+        src/kernel/proc.c:
+		pick_proc() 
+		ready()
+		unready()
+		sched()
+
+        src/kernel/clock.c
+		init_clock()
+
+        src/kernel/clock.c 
+		clock_handler()
+		clock_task()
+		do_clocktick()
+
+        src/kernel/proc.c
+		interrupt()
+
+El tiempo se nos ha agotado y no hemos podido hacer mucho más.
+
+13 Marzo de 2014:
+	Nos hemos puesto de nuevo con la practica, nos hemos puesto en contacto por Telegram y hemos llegado a unas conclusiones de lo que hay que hacer.
+	Primero hemos ido al directorio /usr/include/minix/callnr.h para así tener una llamada más al sistema. Ponemos ncalls a 80 y añadimos #define CAMBIARQ 79.
+	En usr/src/kernel/system.c cambiamos la función do_asops() para poder tener una entrada más en el switch. 
+	Añadimos dentro del switch que ya teniamos:
+		case CAMBIARQ: r=cambiarQ(m_ptr->m1_i2);break;
+		
+	Así conseguimos una llamada más al sistema dentro de nuestra llamada genérica do_asops(); Cuando esto suceda llamaremos a la función cambiarQ() que lleva como argumento un número,que es el quantum que nosotros deseamos tener, y la función está escrita en usr/src/kernel/clock.c
+	
+	Ahora hemos ido al directerio que acabamos de decir /usr/src/kernel/clock.c
+	Nos hemos mirado bastante el fichero clock.c y hay que decir que c¡nos ha costado un poco entenderlo, pero bueno. Vemos que al principio del código del fichero hay definidas unas constantes como MILLISEC o SCHED_RATE
+	
+	Nosotros vamos a definir una variable de tipo entero que la vamos a inicializar con SCHED_RATE
+		PRIVATE int nuevoQ=SCHED_RATE;
+	nuevoQ tendra este valor temporalmente, para que fucione tenemos que cambiar como asigna el valor a la variable sched_ticks;
+	Para ellos vamos a sustituir todas las asignaciones que tiene esta variable en el fichero por nuevoQ;
+	Pero claro haciendo esto, es como si no hicieramos nada, hemos hecho una asignacion más grande de lo normal para nada. Nosotros lo que queriamos hacer era cambiar el Quantum, es por eso que habíamos hecho una llamada al sistema, por eso aquí vamos a definir la función que habíamos dicho antes que era cambiarQ() y que como argumento llevaba el nuevo Quantum:
+	
+		PUBLIC int cambiarQ(nq){
+			int nq;
+			{
+				nuevoQ=nq;
+				sched_ticks=nq;
+				return(OK);
+			}
+			
+	Una vez hecho esto esta todo listo para que podamos cambiar el Quantum del sistema.
+	Ahora nos falta comprobarlo, teníamos hecha una función que se llamaba llamasis que hacía una llamada al sistema. Lo que vamos a hacer es copiarla y hacerla unas pequeñas modificaciones para que se adapte a nuestros requisitos actuales.
+
+			#include<stdio.h>
+			#include<lib.h>
+			#include<sys/tupes.h>
+			#include<unistd.h>
+			int main(void)
+			{
+				message mensaje;
+				mensaje.m1_i1=CAMBIARQ;
+				mensaje.m1_i2=1000;
+				mensaje.m1_i3=4;
+				_taskcall(MM,ASOPS,&msj);
+				printf("%d, %d, %d\n", 
+					mensaje.m1_i1, mensaje.m1_i2, mensaje.m1_i3);
+				return (0);
+			}
+
+	Como podemos ver, le cambiamos ESO por CAMBIARQ (llamada al sistema diferente) y también le cambiamos el segundo argumento, que ahora queremos que sea nuestro quantum.
+	Ahora lo único que nos queda es compilar el nucleo y compilar esta función que acabamos de hacer para cambiar el quantum.
+	Nos muevo al directorio /usr/src/tools y hago un make hdboot, después me muevo a /minix y hago install -S 0 2.0.0r21 y finalmente installboot, después Reinicio.
+	Pues ya esta hecho todo, ahora nos queda que realemente con un ejemplo lo que hemos hecho para ello hacemo la siguiente función. Con tres procesos ligeros y uno pesado veremos que sucede el efecto convoy debido al aumento de quantum y que la TASK_USER ahora es FIFO no apropiativo. 
+
+		#include<stdio.h>
+		#include<stdlib.h>
+		
+		/* Para que tarde 1 segundo en ejecutarse. */
+		#define NUMERO1 	30000
+		/* Para que tarde 10 segundos en ejecutarse. */
+		#define NUMERO2 	85000
+
+		int esPrimo(int numero){
+			int i,flag=1;
+			for(i=2;i<numero;i++){
+				if(numero%i==0){
+					flag=0;
+				}
+			}
+			return flag;
+		}
+
+		creaHijos(int numHijos, int numIteraciones, char caracter){
+			int i, j, pid;
+			
+			for(i = 0; i < numHijos; i++){
+				pid = fork();
+				if(pid==1){
+					printf("Error de fork \n");
+					exit(-1);
+				}
+				if (pid == 0){
+					printf("%cE\n", caracter);
+					for(j=0;j<numIteraciones;j++){
+						esPrimo(j);
+					}
+					printf("%cA\n", caracter);
+					exit(0);
+				}
+			}
+		}
+		
+		main(int argc,char*argv[]){
+			int i, numLigeros, numPesados;
+			char pesado = 'P', ligero = 'L';
+			
+			if(argc!=3){
+				printf("Numero de argumentos incorrecto.\n");
+				exit(-1);
+			}
+			numLigeros = atoi (argv[1]);
+			numPesados = atoi (argv[2]);
+			
+			/* Procesos que tardan 1 segundo. */
+			creaHijos(numLigeros, NUMERO1, ligero);
+			/* Procesos que tardan 10 segundos. */
+			creaHijos(numPesados, NUMERO2, pesado);
+			for(i = 0; i < numLigeros + numPesados; i++){ wait(0); }
+			printf ("FIN.\n");
+		}
+
+Con este programa, al ejecutarlo vemos como realmente si que sucede el efecto convoy, se ejecuta el proceso pesado  el resto tiene que esperar.
+
+17 de marzo de 2014 
+Estamos en el laboratorio, el profesor ha mandado acabar la practica D.
+A comentado que cosas tienen que hacer las funciones que hemos creado en la práctica anterior por eso vamos atratar de mejorarlas.
+
+Hemos comentado entre nosotros las posibles mejoras que se pueden hacer, y nos hemos puesto a ello pero no nos ha dado tiempo a acabarlo.
+El profesor nos ha hecho una serie de comentarios acerca de como tienen que comportarse nuestras funciones y como han de recibir los datos.
+
+____________________________________________________________________
+Apuntes del profesor
+
+Para matar procesos, como tenemos el terminal ocupado, nos vamos a otro terminal, y hacemos ps para saber el PID del proceso que queremos matar. Y después kill -9 PID
+____________________________________________________________________
+
+
+20 de Marzo de 2014
+Hemos continuado trabajando en esto y he intentado acabar lo que no nos dió tiempo el otro día en clase. He tratado de mejorar la función que crea los hilos y hecho correctamente el llamasis.c.
+
+En la función que crea los procesos ligeros y pesados, la he preparado para que pueda recibir como argumento al llamarla el número de procesos ligeros y pesados que ha de tener. A su vez he mejorado el código creando una función que cree los hilos y que a su vez llame a la de calcular si es primo o no. Así obtenemos un código separado y legible.
+
+Después he estado con llamasis, he copiado su código a otra función que usaremos para hacer la llamada al sistema para cambiar el quantum.
+
+Ejecutamos el programa con 3 procesos ligeros y uno pesado con diferentes quantum:
+
+Quantum:  6	|      1000
+________________|_______________
+	  PE	|	PE
+	  LE	|	PA
+	  LE	|	LE
+	  LE	|	LA
+	  LA	|	LE
+	  LA	|	LA
+	  LA	|	LE
+	  PA	|	LA
+	  FIN	|	FIN
+
+El efecto convoy consiste en que si tenemos varios procesos, uno de ellos de duración bastante mayor que el resto, al ejecutar estos procesos, si el proceso largo se ejecuta primero que el resto, los demás tendrán que esperar hasta que el proceso pesado sea dsalojado o termine. Se asemeja así a un convoy de carretera.	  
+
+
+El primer quantum es el que viene por defecto, el segundo es un quantum muy grande para que el algoritmo Round Robim se comporte como un FIFO para este programa.
+
+También hemos modificado la funcion do_asops situada en el gestor de memoria, para añadir otro distribuidor que por defecto llamará al asops del kernel, solo hemos añadido un switch tal que:
+ 
+	/* En a1 está almacenado el numero con el que hicimos la llamada al 
+		sistema (mm_in.m1_i1) */
+	switch (a1){
+		/* Reenvio del mensaje a la tarea del sistema ASOPS */
+		default: 	_taskcall (SYSTASK, ASOPS, &mm_in);
+			break;
+	}
+
+Llamar a una función dentro de la misma función.
+
+* ________________________________________________________________ Practica D ________________________________________________________________ *
+24 de Marzo de 2015
+
+Hemos estado en clase, y durante más de una hora hemos estado atendiendo a las explicaciones del profesor. Más o menos lo hemos entendido.
+Nos hemos puesto a investigar como hay que hacerlo y porque así. No nos ha dado tiempo para a más.
+
+Día 30 de Marzo de 2015.
+
+Hemos empezado a hacer la práctica. 
+En el primer punto nos pide que: imprimamos la lista hole_head junto con las tablas de segmentos de las tareas de sistema una vez inicializada la memoria.
+La memoria se inicializa en /usr/src/mm/main.c en la función mm_init(); Al final de esta función haremos una llamada a dos funciones, listaHole() y tablaSegmentos() -las mostramos más abajo-, las llamamos justo al final porque es cuando ya estarán inicializadas las tablas de agujeros del sistema (se inicializan con la llamada a "mem_init" dentro de esta funcion "mm_init").
+Estas funciones, como su nombre indica, nos imprimen lo que nos ha pedido. Nos queda implementar dichas funciones, el enunciado nos dice de que llegaremos a la  conclusión de que deberan ser escritas en alloc.c, también detro del directorio mm. Eso es porque ahí estan declaradas las estructuras que necesitamos para nuestro objetivo. Las funciones que hemos escrito son las siguientes:
+
+PUBLIC void imprimeSegmento(pp)
+struct mproc *pp;
+{
+	int i;
+	struct mproc *tmp1;
+	struct mem_map *tmp2;
+	tmp1 = pp;
+	
+	printf ("	<Pid del proceso %d>\n", 
+		tmp1 -> mp_pid);
+	
+	for (i = 0; i < NR_SEGS; i++){
+		tmp2 = &tmp1 -> mp_seg[i];
+		printf("	<Segmento %d>  ",i);
+		printf("   mem_vir: %d,  mem_phys: %d,  mem_len: %d \n",
+			tmp2 -> mem_vir, tmp2 -> mem_phys,
+			tmp2 -> mem_len);
+	}
+}
+
+PUBLIC int listaHole()
+{
+	struct hole *pp;
+	pp = hole_head;
+	while (pp != NIL_HOLE){
+		printf("h_base: %d,   h_len: %d \n", pp -> h_base, pp -> h_len);
+		pp = pp -> h_next;
+	}
+}
+
+
+PUBLIC void tablaSegmentos()
+{
+	int i;
+	struct mproc *tmp;
+	for(i = 0; i < NR_PROCS; i++){
+		tmp = &mproc[i];
+		if (tmp -> mp_flags == IN_USE){
+			printf("<Proceso %d>\n", i);
+			imprimeSegmento(tmp);
+		}
+	}
+}
+
+Como curiosidad, mientras hacía esta función "tablasegmentos" intentando acceder al proceso padre del actual para imprimir varios campos que contenía mproc[], después de compilar, al reiniciar me saltó en pantalla un "Kernel Panic", y Minix no arrancaba, después de pensar un rato arranqué desde el disquete y cambié la línea que contenía el error.
+
+PUBLIC void do_imprimeSeg()
+{
+	struct mproc *pp = &mproc[who];
+	imprimeSegmento(pp);
+	listaHole();
+}
+
+También incluimos <signal.h>, "glo.h" y "mproc.h"
+
+
+Llamando a estas dos funciones obtenemos lo deseado. Como vemos, tenemos varias estructuras a las que accedemos a los valores dentro de bucles para conocer así su valor en los distintos procesos.
+
+En el punto 2 nos pide que hagamos un comando para ello.
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+No sabemos como hacer esto, tenemos dudas sobre como hacerlo. Así que esperamos a preguntar en clase.
+Mientras, sobre esto he estado investigadando sobre los comandos en minix, y en usr/src/commands/simple encontramos una serie de directorios en los que encontramos comandos. Me he fijado en el comando who, que imprime quien eres y que fecha y hora es. Pero falta algo, falta ficheros que peparen eso y que cuando escribas en linea te lo lea y ejecute ese .c. Pero soy incapaz de averiguarlo asi que de momento abandonamos este camino y esperamos.
+
+En el tercer punto nos pide que hagamos una llamada al mm,al igual que en anteriores prácticas hicimos llamadas a las tareas del sistema.
+En nuestro caso tenemos que hacer unas modificaciones en do_asops() para que nos lleve al gestor de memoria.
+
+En /usr/src/mm/utilities.c en la funcion do_asops() añadimos en el distribuidor:
+
+	switch(a1){
+		case IMPRIMESEG:	do_imprimeSeg();	break;
+		
+		case MEMLIBRE:		do_memlibre();		break;
+
+		default: 		_taskcall(SYSTASK,ASOPS,&mm_in);
+					break;
+	}
+	
+También añadimos la funcion do_memLibre, que muestra los segmentos y los huecos.
+	
+	PUBLIC int do_memlibre()
+	{
+		listaHole();
+		tablaSegmentos();
+	}
+	
+También necesitamos añadir dos nuevas definiciones en /usr/include/minux/callnr.h, así que incrementamos el valor de NCALLS y añadimos al final:
+	#define MEMLIBRE	80
+	#define IMPRIMESEG	81
+	
+Con esto ya tenemos nuestra llamada al sistema hecha, que nos imprime la tabla de segmentos  hole_head.
+También, en directorio creado por nosotros en root, creamos el programa "monitorFork", que como su nombre indica es el programa que se encargará de monitorizar la función fork:
+	
+	main(){
+		int pid;
+		printf ("Inicio\n");
+		llamada();
+		
+		pid = fork();
+		if (pid == -1){
+			printf ("Error de Fork\n");
+			exit(-1);
+		}
+		if (pid == 0){
+			/* caso hijo */
+			printf ("Hijo\n");
+			llamada();
+			exit(0);
+		}
+		
+		/* caso padre */
+		printf ("Padre\n");
+		llamada();
+		wait(0);
+	}
+	
+La función llamada simplemente hace la llamada al sistema a IMPRIMESEG mediante taskcall.
+
+
+
+* ______________________________________________________________ Practica Libre ______________________________________________________________ *
+14 de Abril de 2015
+
+Tras comprobar los diferentes opciones decidimos hacer la practica de algoritmos para el gestor de memoria (First Fit, Best Fit, Worst Fit, Next Fit), estuvimos revisando /usr/src/mm/alloc.c (sobre todo la funcion alloc_mem, la cual ya tenía implementado el algoritmo First Fit) pero no nos dio tiempo a hacer nada más.
+
+21 de Abril de 2015
+
+Distribuidor de algoritmos y first_fit
+
+Empezamos a modificar alloc_mem (previamente copiamos el archivo /usr/src/mm/alloc.c a /root por si teniamos que volver al alloc original). Decidimos que lo primero que debíamos hacer era un distribuidor que nos permitiera seleccionar el algoritmo a usar para asignar memoria. La idea es tener una variable global a la cual nosotros llamamos "algoritmo" la cual cambiariamos dependiendo del algoritmo que quisiesemos usar, si cambiasemos su valor, la siguiente vez que llamemos a alloc_mem para asignar memoria usaría ese algoritmo. 
+
+Lo primero que hicimos fue mover todo el contenido que había en la funcion alloc_mem a otra función que creamos llamada "first_fit" (originalmente en alloc_mem estaba el algoritmo first fit para asignar memoria). Después modificamos el código alloc_mem para introducir un switch que seleccionara el algoritmo a usar dependiendo del valor de la variable global "algoritmo", la cual está declarada como en alloc.c:
+    PRIVATE int algoritmo = FIRST_FIT;
+    
+Como se puede ver está inicializa a FIRST_FIT (el unico algoritmo que tenemos actualmente), FIRST_FIT, junto con las constantes BEST_FIT, NEXT_FIT y WORST_FIT están declaradas en /usr/include/minix/callnr.h como:
+
+    #define FIRST_FIT       0
+    #define BEST_FIT        1
+    #define NEXT_FIT        2
+    #define WORST_FIT       3
+    
+Mediante estas constantes, junto la variable algoritmo, podemos identificar el algoritmo a usar.
+
+Código actual de alloc_mem:
+
+            PUBLIC phys_clicks alloc_mem(phys_clicks clicks) {
+                phys_clicks old_base;
+                
+                switch (algoritmo){
+                    case FIRST_FIT: old_base = first_fit(clicks);    break;
+                    
+                    case BEST_FIT:  old_base = best_fit(clicks);     break;
+                    
+                    case NEXT_FIT:  old_base = next_fit(clicks);     break;
+                    
+                    case WORST_FIT: old_base = worst_fit(clicks);    break;
+                    
+                    default:    printf ("PANIC.\n");    break;
+                }
+                
+                return (old_base);
+            }
+            
+Se puede observar que si cambiamos algoritmo a un numero distinto al de las constantes, la próxima vez que necesite asignar memoria se imprimirá un PANIC en pantalla, ya que no podremos utilizar un algoritmo para asignar memoria, (posiblemente después de esto haya que apagar la máquina virtual, ya que no se podrá asignar memoria para nada).
+
+Como hemos dicho, el único algoritmo actualmente implementado es first fit y está en la funcion PUBLIC phys_clicks best_fit(phys_clicks clicks) { ... }, para poder comprobar que todo funcionaba correctamente y poder compilar creamos unas funciones sin apenas código en su interior como:
+
+    PUBLIC phys_clicks best_fit(phys_clicks clicks) {   return (NO_MEM);    }
+    
+    PUBLIC phys_clicks next_fit(phys_clicks clicks) {   return (NO_MEM);    }
+    
+    PUBLIC phys_clicks worst_fit(phys_clicks clicks) {   return (NO_MEM);    }
+    
+Compilamos y reiniciamos, al arrancar todo funcionaba correctamente, después de esto no hemos hecho más este día.
+
+29 de Abril de 2015
+
+best_fit, worst_fit
+
+Empezamos a hacer el algoritmo "Best Fit", el cual consiste en elegir el hueco que mejor se ajuste de entre los huecos libres, para ello hicimos un bucle que recorria toda la tabla de huecos libres, y se quedaba con el hueco cuyo tamaño se ajustaba más a los clicks solicitados. También hemos hecho "Worst Fit", el cual consiste en elegir el hueco más grande de la tabla de huecos libres, su código es muy similar al de "Best Fit", ya que solo hay que cambiar una comparación.
+
+Posteriormente hicimos un programa y una llamada al sistema que nos permitiera cambiar de algoritmo, cambiando la variable "algoritmo", crear la llamada al sistema es muy simple ya que solo teníamos que añadir a /usr/include/minix/callnr.h una nueva constante: 
+    #define MEMORIA     82 
+y añadir una nueva entrada en el switch de do_asops del gestor de memoria (/usr/src/mm/utility.c), que se encargaba de seleccionar una llamada dependiendo del valor del mensaje:
+    switch(a1) {
+        ...
+        case MEMORIA:       do_memoria(a2);     break;
+        ...
+    }
+El código de do_memoria (situado en /usr/src/mm/alloc.c) es el siguiente:
+    
+    public void do_memoria(int nuevo_algoritmo) {
+        algoritmo = nuevo_algoritmo;
+    }
+    
+También hicimos un pequeño programa que hacía la llamada al gestor de memoria. Compilamos el núcleo y después al cambiar de algoritmo vimos que los algoritmos que hicimos no funcionaban.
+
+5 de mayo de 2015
+
+Corregimos los algoritmos Best Fit y Worst Fit, el problema que tenían era que siempre inicializabamos una variable a un valor incorrecto (hole_head) y nunca entraba en el while  que se encarga de buscar el hueco más pequeño (en el caso de Best Fit), de forma que siempre retornabamos NO_MEM. El código final de best fit es el siguiente:
+    
+    PUBLIC phys_clicks best_fit(phys_clicks clicks)
+    {
+        register struct hole *hp, *prev_ptr,*hp_bueno,*prevB_ptr;
+        phys_clicks ols_base;
+        int tam;
+
+        hp = hole_head;
+        hp_bueno = hole_head;
+
+        tam = 400000;
+        prev_ptr = prevB_ptr = 0;
+
+        /* Seleccionamos el hueco más pequeño y superior a los clicks solicitados */
+        while(hp != NIL_HOLE){
+                if(hp->h_len < clicks){
+                        if(hp->h_len < tam){
+                                tam = hp->h_len;
+                                prevB_ptr = prev_ptr;
+                                hp_bueno = hp;
+                        }
+                }
+                prev_ptr = hp;
+                hp = hp->h_next;
+        }
+        
+        /* Si el hueco es suficientemente grande hacemos los cambios necesarios para asignar el hueco */
+        if(hp_bueno->h_len >= clicks){
+                old_base = hp_bueno->h_base;
+                hp_bueno->h_base += clicks;
+                hp_bueno->h_len -= clicks;
+
+                if(hp_bueno->h_len != 0) return(old_base); 
+
+                /* El hueco ha sido asignado completamente, así que lo borramos de la tabla de huecos libres */
+                del_slot(prevB_ptr, hp_bueno);
+                return(old_base);
+        }
+        
+        /* Si no hemos podido encontrar un hueco suficientemente grande, retornamos NO_MEM */
+        return(NO_MEM);
+    }
+    
+El código de worst_fit(phys_clicks clicks) es el mismo pero cambiando el if(hp->h_len < tam) dentro del while de best_fit que se encarga de seleccionar el agujero más pequeño por if(hp->h_len > tam) para que así seleccione el más grande.
+Al compilar y cambiar de algoritmo comprobamos que funcionaba.
+
+8 de mayo de 2015
+Empezamos a hacer next_fit, algoritmo que funciona igual que el first fit, pero en vez de empezar por hole_head empieza a buscar por el último agujero usado (en caso de llegar a NIL_HOLE vuelve a la cabeza). Para que esto pueda funcionar guardamos el último agujero usado en una variable global llamada "hp_ultimo" declarada en /usr/src/mm/alloc.c, la cual se incializa a hole_head en la función main situada en /usr/src/mm/main.c (al principio de main.c hay que poner extern struct hole *hp_ultimo y  extern struct hole *hole_head).
+
+Para comprobar que funcionaba hicimos una llamada al sistema que mostraba la base y la longitud de los huecos libres y cual de los huecos libres era el hp_ultimo, a la cual llamamos "tablaHuecos" cuyo código es el siguiente:
+    
+    PUBLIC void do_tablaHuecos() {
+        struct hole *pp;
+        pp = hole_head;
+        
+        while (pp != NIL_HOLE) {
+            printf ("BASE: %d\t\tLEN: %d\n", pp->h_base, pp->h_len);
+            pp = pp->h_next;
+        }
+    }
+    
+Después de compilar y cambiar el algoritmo a next fit vimos que no asignaba correctamente los huecos, dexxxxx forma que se creaban muchos huecos erróneos y terminaba saltando un error.
+
+Día 11 de Mayo de 2015.
+
+El lunes fuimos al despacho debido a los errores que tenía next_fit, conseguimos solucionar algunos errores de nuestro código cambiamos un while por un do-while y depuramos el código, pero aún así seguíamos con errores, como huecos que se duplicaban o que aparecían en lugares incorrectos.
+
+Día 12 de Mayo de 2015.
+
+El martes estuvimos la tarde en el laboratorio buscando más errores, conseguimos encontrar otro haciendo trazas del código, un error que consistia en que al hacer del_slot, si hp (un agujero temporal) fuera hole_head, asignariamos a hp_ultimo un hole_head que ya no existia. También empezamos a pensar que hp_ultimo podría ser incorrecto al empezar el algoritmo, por lo que antes de empezar el algoritmo creamos un bucle para comprobar si el agujero hp_ultimo, nada más llamar a la funcion next_fit, estaba dentro de los huecos libres correctos. Código de next_fit:
+
+    PUBLIC phys_clicks next_fit(phys_clicks clicks) {
+        register struct hole *hp, *prev_ptr;
+        phys_clicks old_base;
+        int bandera_NuevoHead = 0;
+        
+        /* Comprobamos si hp_ultimo esta dentro de los huecos libres */
+        hp = hole_head;
+        while (hp != hp_ultimo){
+            if (hp == NIL_HOLE){
+                /* hp_ultimo no esta dentro de los huecos libres, le asignamos hole_head */
+                hp_ultimo = hole_head;
+                break;
+            }
+            
+            hp = hp->h_next;
+        }
+        
+        hp = hp_ultimo;
+        
+        do{
+            prev_ptr = hp;
+            hp = hp->h_next;
+            /* Si llegamos al final de la tabla de hueco libres volvemos a buscar por el principio */
+            if (hp == NIL_HOLE) hp = hole_head;
+            
+            /* hemos encontrado un hueco suficientemente grande, lo asignamos */
+            if (hp->h_len >= clicks){
+                old_base = hp->h_base;
+                hp->h_base += clicks;
+                hp->h_len -= clicks;
+                
+                /* El agujero solo se usa parcialmente, reducimos su tamaño, asignamos a hp_ultimo el ultimo hp usado y retornamos old_base */
+                if (hp->h_len != 0) {
+                    hp_ultimo = hp;
+                    return (old_base);
+                }
+                
+                /* Se ha usado el agujero completamente, lo eliminamos de la tabla de huecos libres */
+                
+                if (hp == hole_head) bandera_NuevoHead = 1;
+                del_slot(prev_ptr, hp);
+                
+                if (bandera_NuevoHead == 1) hp_ultimo = hole_head; /* hole_head ha sido cambiado, asignamos a hp_ultimo el nuevo hole_head */
+                else hp_ultimo = prev_ptr; /* asignamos a hp_ultimo el prev_ptr usado */
+                
+                return (old_base);
+            }
+        } while(hp != hp_ultimo);
+        
+        /* No hemos encontrado ningun agujero lo suficientemente grande, retornamos NO_MEM */
+        return (NO_MEM);
+    }
+    
+14 de Mayo de 2015
+
+Para demostrar que funcionan los algoritmos imprimimos con cada llamada a memoria la tabla de huecos libres:
+    Con Best Fit ejecutamos ciertas operaciones:
+    
+        537 clicks
+            antes de ejecutar el algoritmo:
+                BASE: 422   LEN: 85
+                BASE: 531   LEN: 67
+                BASE: 665   LEN: 248
+                BASE: 1870  LEN: 474
+                BASE: 25514 LEN: 40021
+            después:
+                BASE: 422   LEN: 85
+                BASE: 531   LEN: 67
+                BASE: 665   LEN: 248
+                BASE: 1870  LEN: 474
+                BASE: 26051 LEN: 39484 <-----cambio
+
+        71 clicks
+            antes de ejecutar el algoritmo:
+                BASE: 422   LEN: 85
+                BASE: 531   LEN: 67
+                BASE: 665   LEN: 248
+                BASE: 1870  LEN: 474
+                BASE: 25514 LEN: 40021
+            después:
+                BASE: 493   LEN: 14 <-----cambio
+                BASE: 531   LEN: 67
+                BASE: 665   LEN: 248
+                BASE: 1870  LEN: 474
+                BASE: 26051 LEN: 39484
+
+        377 clicks
+            antes de ejecutar el algoritmo:
+                BASE: 422   LEN: 85
+                BASE: 531   LEN: 67
+                BASE: 6dddddddddddddddd65   LEN: 248
+                BASE: 1870  LEN: 474
+                BASE: 25514 LEN: 40021
+            después:
+                BASE: 493   LEN: 1a 
+                BASE: 531   LEN: 67
+                BASE: 665   LEN: 248
+                BASE: 2247  LEN: 97 <-----cambio
+                BASE: 26051 LEN: 39484
+
+        97 clicks
+            antes de ejecutar el algoritmo:
+                BASE: 422   LEN: 85
+                BASE: 531   LEN: 67
+                BASE: 665   LEN: 248
+                BASE: 1870  LEN: 474
+                BASE: 25514 LEN: 40021
+            después:
+                BASE: 422   LEN: 85
+                BASE: 531   LEN: 67
+                BASE: 762   LEN: 151 <-----cambio
+                BASE: 1870  LEN: 474
+                BASE: 25514 LEN: 40021
+ 
+    Con First Fit ejecutamos ciertas operaciones:
+    
+        537 clicks
+            antes de ejecutar el algoritmo:
+                BASE: 422   LEN: 85
+                BASE: 531   LEN: 67
+                BASE: 665   LEN: 248
+                BASE: 1870  LEN: 474
+                BASE: 25514 LEN: 40021
+            después:
+                BASE: 422   LEN: 85
+                BASE: 531   LEN: 67
+                BASE: 665   LEN: 248
+                BASE: 1870  LEN: 474
+                BASE: 26051 LEN: 39484 <-----cambio
+
+        377 clicks
+            antes de ejecutar el algoritmo:
+                BASE: 422   LEN: 85
+                BASE: 531   LEN: 67
+                BASE: 665   LEN: 248
+                BASE: 1870  LEN: 474
+                BASE: 25514 LEN: 40021
+            después:
+                BASE: 422   LEN: 85
+                BASE: 531   LEN: 67
+                BASE: 665   LEN: 248
+                BASE: 2247  LEN: 97  <-----cambio
+                BASE: 25514 LEN: 40021
+
+        71 clicks
+            antes de ejecutar el algoritmo:
+                BASE: 422   LEN: 85
+                BASE: 837   LEN: 76
+                BASE: 1870  LEN: 474
+                BASE: 25514 LEN: 40021
+            después:
+                BASE: 493   LEN: 14 <-----cambio
+                BASE: 837   LEN: 76
+                BASE: 1870  LEN: 474
+                BASE: 25514 LEN: 40021
+
+    Con Worst Fit ejecutamos ciertas operaciones:
+        377 clicks
+            antes de ejecutar el algoritmo:
+                BASE: 422   LEN: 85
+                BASE: 837   LEN: 76
+                BASE: 1870  LEN: 474
+                BASE: 25514 LEN: 40021
+            después:
+                BASE: 422   LEN: 85 
+                BASE: 837   LEN: 76
+                BASE: 1870  LEN: 474
+                BASE: 25891 LEN: 39644 <-----cambio
+
+        97 clicks
+            antes de ejecutar el algoritmo:
+                BASE: 422   LEN: 85
+                BASE: 837   LEN: 76
+                BASE: 1870  LEN: 474
+                BASE: 25514 LEN: 40021
+            después:
+                BASE: 422   LEN: 85
+                BASE: 837   LEN: 76
+                BASE: 1870  LEN: 474
+                BASE: 25611 LEN: 39924 <-----cambio
+    
+Como se puede comprobar, los anteriores algoritmos funcionan correctamente, el siguiente no funciona correctamente:
+    Con Next Fit ejecutamos ciertas operaciones:                
+        440 clicks
+            antes de ejecutar el algoritmo:
+                BASE: 422   LEN: 85
+                BASE: 531   LEN: 67
+                BASE: 665   LEN: 248
+                BASE: 1870  LEN: 474
+                BASE: 25514 LEN: 40021
+            después:
+                BASE: 422   LEN: 85
+                BASE: 531   LEN: 67
+                BASE: 665   LEN: 248
+                BASE: 2310  LEN: 34 <-----cambio
+                BASE: 25514 LEN: 40021
+
+        306 clicks
+            antes de ejecutar el algoritmo:
+                BASE: 422   LEN: 85
+                BASE: 531   LEN: 67
+                BASE: 665   LEN: 248
+                BASE: 1870  LEN: 474
+                BASE: 25514 LEN: 40021
+            después:
+                BASE: 422   LEN: 85
+                BASE: 531   LEN: 67
+                BASE: 665   LEN: 248
+                BASE: 2176  LEN: 168 <-----cambio
+                BASE: 25514 LEN: 40021
+
+        71 clicks
+            antes de ejecutar el algoritmo:
+                BASE: 422   LEN: 85
+                BASE: 531   LEN: 67
+                BASE: 665   LEN: 248
+                BASE: 1870  LEN: 474
+                BASE: 25514 LEN: 40021
+            después:
+                BASE: 422   LEN: 85
+                BASE: 531   LEN: 67
+                BASE: 736   LEN: 177
+                BASE: 1870  LEN: 474
+                BASE: 25514 LEN: 40021
+
+        233 clicks
+            antes de ejecutar el algoritmo:
+                BASE: 422   LEN: 85
+                BASE: 531   LEN: 67
+                BASE: 665   LEN: 248
+                BASE: 1870  LEN: 474
+                BASE: 25514 LEN: 40021
+            después:
+                BASE: 422   LEN: 85
+                BASE: 531   LEN: 67
+                BASE: 736   LEN: 177
+                BASE: 2130  LEN: 241
+                BASE: 25514 LEN: 40021
+
+        Después de hace muchos sleep 500&:
+                BASE: 422   LEN: 85
+                BASE: 596   LEN: 2
+                BASE: 866   LEN: 47
+                BASE: 2325  LEN: 19
+                BASE: 25709 LEN: 39826
+
+Como conclusion, cabe destacar que cada vez que a hp se le asigna hole_head, en la primera iteracion se hará h_next, con lo cual, para que el primer hueco se ocupe, primero se tienen que llenar el resto de huecos de la tabla, y como estamos limitados por el número de forks que se pueden hacer, nunca se utilizará el primer hueco.
+Podemos también cambiar el número de procesos permitidos por minix cambiando en /usr/include/minix/config.h la variable NR_PROCS pero aún así es insuficiente.
+También hay que decir, que cada vez que hp_ultimo toma un valor erroneo, le asignamos hole_head para evitar que se crearan huecos erróneos con lo cual ns realmente un next_fit, pero no hemos encontrado algo que se aproxime mejor.
